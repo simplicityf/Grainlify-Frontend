@@ -1,196 +1,137 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, fireEvent } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { AddRepositoryModal, validateRepoFormat } from './AddRepositoryModal';
-import { renderWithTheme } from '../../../test/renderWithTheme';
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { renderWithTheme } from '../../../test/renderWithTheme'
+import { AddRepositoryModal } from './AddRepositoryModal'
 
-const createProject = vi.fn();
-const getEcosystems = vi.fn();
+const mockCreateProject = vi.fn()
+const mockGetEcosystems = vi.fn()
 
 vi.mock('../../../shared/api/client', () => ({
-  createProject: (...args: unknown[]) => createProject(...args),
-  getEcosystems: (...args: unknown[]) => getEcosystems(...args),
-}));
+  createProject: (...args: unknown[]) => mockCreateProject(...args),
+  getEcosystems: (...args: unknown[]) => mockGetEcosystems(...args),
+}))
 
-describe('validateRepoFormat unit tests', () => {
-  it('accepts valid GitHub repository formats', () => {
-    expect(validateRepoFormat('facebook/react')).toBeNull();
-    expect(validateRepoFormat('owner-name/repo.name')).toBeNull();
-    expect(validateRepoFormat('owner/repo_name-123')).toBeNull();
-    expect(validateRepoFormat('39characterowner-1234567890123456789/repo')).toBeNull();
-    expect(validateRepoFormat('owner/100characterrepo-12345678901234567890123456789012345678901234567890123456789012345678901234567890')).toBeNull();
-  });
+const defaultProps = {
+  isOpen: true,
+  onClose: vi.fn(),
+  onSuccess: vi.fn(),
+}
 
-  it('rejects empty input', () => {
-    expect(validateRepoFormat('')).toContain('required');
-    expect(validateRepoFormat('   ')).toContain('required');
-  });
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockGetEcosystems.mockResolvedValue({
+    ecosystems: [
+      { name: 'Ethereum', slug: 'ethereum' },
+      { name: 'Starknet', slug: 'starknet' },
+    ],
+  })
+})
 
-  it('rejects inputs longer than 140 characters', () => {
-    const longInput = 'a'.repeat(40) + '/' + 'b'.repeat(101);
-    expect(validateRepoFormat(longInput)).toContain('too long');
-  });
+describe('AddRepositoryModal', () => {
+  it('renders when isOpen is true', async () => {
+    renderWithTheme(<AddRepositoryModal {...defaultProps} />)
+    expect(screen.getByText('Add a Repository')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('Ethereum')).toBeInTheDocument()
+    })
+  })
 
-  it('rejects input missing a slash', () => {
-    expect(validateRepoFormat('owner-repo')).toContain('must be in format');
-  });
+  it('does not render when isOpen is false', () => {
+    renderWithTheme(<AddRepositoryModal {...defaultProps} isOpen={false} />)
+    expect(screen.queryByText('Add a Repository')).not.toBeInTheDocument()
+  })
 
-  it('rejects input with multiple slashes', () => {
-    expect(validateRepoFormat('owner/repo/extra')).toContain('exactly one slash');
-  });
+  it('shows repo name required error on mount with empty fields', async () => {
+    renderWithTheme(<AddRepositoryModal {...defaultProps} />)
 
-  it('rejects empty owner or repo segments', () => {
-    expect(validateRepoFormat('/repo')).toContain('Owner segment cannot be empty');
-    expect(validateRepoFormat('owner/')).toContain('Repository segment cannot be empty');
-    expect(validateRepoFormat('/')).toContain('Owner segment cannot be empty');
-  });
+    expect(await screen.findByText('Repository name is required')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add repository/i })).toBeDisabled()
+    expect(mockCreateProject).not.toHaveBeenCalled()
+  })
 
-  it('rejects invalid GitHub owner names', () => {
-    // Cannot start with hyphen
-    expect(validateRepoFormat('-owner/repo')).toContain('Owner name must contain only');
-    // Cannot end with hyphen
-    expect(validateRepoFormat('owner-/repo')).toContain('Owner name must contain only');
-    // Cannot have consecutive hyphens
-    expect(validateRepoFormat('owner--name/repo')).toContain('Owner name must contain only');
-    // Cannot contain invalid chars
-    expect(validateRepoFormat('owner$/repo')).toContain('Owner name must contain only');
-    expect(validateRepoFormat('owner name/repo')).toContain('Owner name must contain only');
-    // Cannot be > 39 characters
-    expect(validateRepoFormat('a'.repeat(40) + '/repo')).toContain('Owner name must contain only');
-  });
+  it('shows repo name format error for missing slash', async () => {
+    const user = userEvent.setup()
+    renderWithTheme(<AddRepositoryModal {...defaultProps} />)
+    await waitFor(() => {
+      expect(screen.getByText('Ethereum')).toBeInTheDocument()
+    })
 
-  it('rejects invalid GitHub repository names', () => {
-    // Cannot contain invalid characters (spaces, special chars)
-    expect(validateRepoFormat('owner/repo name')).toContain('Repository name must contain only');
-    expect(validateRepoFormat('owner/repo$')).toContain('Repository name must contain only');
-    // Cannot be "." or ".."
-    expect(validateRepoFormat('owner/.')).toContain('cannot be "." or ".."');
-    expect(validateRepoFormat('owner/..')).toContain('cannot be "." or ".."');
-    // Cannot be > 100 characters
-    expect(validateRepoFormat('owner/' + 'b'.repeat(101))).toContain('Repository name must contain only');
-  });
-});
+    await user.clear(screen.getByPlaceholderText(/owner\/repo/i))
+    await user.type(screen.getByPlaceholderText(/owner\/repo/i), 'invalidname')
 
-describe('AddRepositoryModal UI integration tests', () => {
-  beforeEach(() => {
-    createProject.mockReset();
-    getEcosystems.mockReset();
-    getEcosystems.mockResolvedValue({
-      ecosystems: [
-        { name: 'JavaScript', slug: 'javascript' },
-        { name: 'TypeScript', slug: 'typescript' },
-      ],
-    });
-  });
+    expect(await screen.findByText('Repository name must be in format: owner/repo')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /add repository/i })).toBeDisabled()
+    expect(mockCreateProject).not.toHaveBeenCalled()
+  })
 
-  it('renders input, select, and button fields correctly when open', async () => {
-    renderWithTheme(
-      <AddRepositoryModal isOpen={true} onClose={() => {}} onSuccess={() => {}} />
-    );
+  it('calls createProject on valid submit', async () => {
+    mockCreateProject.mockResolvedValue({ id: '1' })
+    const user = userEvent.setup()
+    renderWithTheme(<AddRepositoryModal {...defaultProps} />)
+    await waitFor(() => {
+      expect(screen.getByText('Ethereum')).toBeInTheDocument()
+    })
+
+    await user.type(screen.getByPlaceholderText(/owner\/repo/i), 'facebook/react')
+    await user.selectOptions(screen.getByRole('combobox'), 'Ethereum')
+    await user.click(screen.getByRole('button', { name: /add repository/i }))
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/Repository Name/i)).toBeInTheDocument();
-      expect(screen.getByRole('combobox')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Add Repository/i })).toBeInTheDocument();
-    });
-  });
-
-  it('validates and displays inline error on input blur', async () => {
-    const user = userEvent.setup();
-    renderWithTheme(
-      <AddRepositoryModal isOpen={true} onClose={() => {}} onSuccess={() => {}} />
-    );
-
-    const input = screen.getByLabelText(/Repository Name/i);
-    await user.type(input, 'invalid owner/repo');
-    fireEvent.blur(input);
-
-    await waitFor(() => {
-      const error = screen.getByRole('alert');
-      expect(error).toBeInTheDocument();
-      expect(error).toHaveTextContent(/Owner name must contain only/i);
-      expect(input).toHaveAttribute('aria-invalid', 'true');
-      expect(input).toHaveAttribute('aria-describedby', 'github-fullname-error');
-    });
-  });
-
-  it('clears inline error when user types into the input', async () => {
-    const user = userEvent.setup();
-    renderWithTheme(
-      <AddRepositoryModal isOpen={true} onClose={() => {}} onSuccess={() => {}} />
-    );
-
-    const input = screen.getByLabelText(/Repository Name/i);
-    await user.type(input, 'invalid owner/repo');
-    fireEvent.blur(input);
-
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toBeInTheDocument();
-    });
-
-    await user.type(input, 'a');
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(input).toHaveAttribute('aria-invalid', 'false');
-    expect(input).toHaveAttribute('aria-describedby', 'github-fullname-help');
-  });
-
-  it('blocks submission and displays inline error for invalid formats on submit', async () => {
-    const user = userEvent.setup();
-    renderWithTheme(
-      <AddRepositoryModal isOpen={true} onClose={() => {}} onSuccess={() => {}} />
-    );
-
-    await waitFor(() => expect(screen.getByRole('combobox')).not.toBeDisabled());
-
-    const input = screen.getByLabelText(/Repository Name/i);
-    await user.type(input, 'owner/repo$');
-
-    const select = screen.getByRole('combobox');
-    await user.selectOptions(select, 'TypeScript');
-
-    const submitBtn = screen.getByRole('button', { name: /Add Repository/i });
-    await user.click(submitBtn);
-
-    await waitFor(() => {
-      const error = screen.getByRole('alert');
-      expect(error).toBeInTheDocument();
-      expect(error).toHaveTextContent(/Repository name must contain only/i);
-      expect(createProject).not.toHaveBeenCalled();
-    });
-  });
-
-  it('trims whitespace and submits successfully for valid inputs', async () => {
-    const user = userEvent.setup();
-    const onSuccess = vi.fn();
-    const onClose = vi.fn();
-
-    createProject.mockResolvedValue({});
-
-    renderWithTheme(
-      <AddRepositoryModal isOpen={true} onClose={onClose} onSuccess={onSuccess} />
-    );
-
-    await waitFor(() => expect(screen.getByRole('combobox')).not.toBeDisabled());
-
-    const input = screen.getByLabelText(/Repository Name/i);
-    await user.type(input, '  facebook/react   ');
-
-    const select = screen.getByRole('combobox');
-    await user.selectOptions(select, 'TypeScript');
-
-    const submitBtn = screen.getByRole('button', { name: /Add Repository/i });
-    await user.click(submitBtn);
-
-    await waitFor(() => {
-      expect(createProject).toHaveBeenCalledWith({
+      expect(mockCreateProject).toHaveBeenCalledWith({
         github_full_name: 'facebook/react',
-        ecosystem_name: 'TypeScript',
+        ecosystem_name: 'Ethereum',
         language: undefined,
         tags: undefined,
         category: undefined,
-      });
-      expect(screen.getByText(/Repository added successfully!/i)).toBeInTheDocument();
-    });
-  });
-});
+      })
+    })
+  })
+
+  it('disables submit button while submitting', async () => {
+    mockCreateProject.mockImplementation(() => new Promise(() => {})) // never resolves
+    const user = userEvent.setup()
+    renderWithTheme(<AddRepositoryModal {...defaultProps} />)
+    await waitFor(() => {
+      expect(screen.getByText('Ethereum')).toBeInTheDocument()
+    })
+
+    await user.type(screen.getByPlaceholderText(/owner\/repo/i), 'facebook/react')
+    await user.selectOptions(screen.getByRole('combobox'), 'Ethereum')
+    await user.click(screen.getByRole('button', { name: /add repository/i }))
+
+    expect(await screen.findByText('Adding...')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /adding/i })).toBeDisabled()
+  })
+
+  it('shows success message and calls onSuccess after valid submit', async () => {
+    mockCreateProject.mockResolvedValue({ id: '1' })
+    const user = userEvent.setup()
+    const onSuccess = vi.fn()
+    const onClose = vi.fn()
+    renderWithTheme(
+      <AddRepositoryModal isOpen={true} onClose={onClose} onSuccess={onSuccess} />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText('Ethereum')).toBeInTheDocument()
+    })
+
+    await user.type(screen.getByPlaceholderText(/owner\/repo/i), 'facebook/react')
+    await user.selectOptions(screen.getByRole('combobox'), 'Ethereum')
+    await user.click(screen.getByRole('button', { name: /add repository/i }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Repository added successfully!')).toBeInTheDocument()
+    })
+
+    // After 1.5s the modal should close
+    await waitFor(
+      () => {
+        expect(onSuccess).toHaveBeenCalled()
+        expect(onClose).toHaveBeenCalled()
+      },
+      { timeout: 2000 },
+    )
+  })
+})
